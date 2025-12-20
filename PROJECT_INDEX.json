@@ -1,0 +1,112 @@
+{
+  "project": {
+    "name": "rs-trainz",
+    "version": "0.1.0",
+    "description": "DC model train throttle controller with physical, web, and MQTT control",
+    "language": "rust",
+    "edition": "2021",
+    "license": "MIT",
+    "generated": "2025-12-12"
+  },
+  "metrics": {
+    "lines_of_code": 950,
+    "source_files": 12,
+    "test_files": 1,
+    "test_count": 7
+  },
+  "entry_points": {
+    "library": "src/lib.rs",
+    "tests": "tests/throttle_tests.rs"
+  },
+  "modules": {
+    "commands": {
+      "path": "src/commands.rs",
+      "exports": ["CommandSource", "CommandType", "ThrottleCommand", "ThrottleCommandDyn", "PrioritizedCommand", "CommandOutcome", "TransitionResult", "RejectReason"]
+    },
+    "priority": {
+      "path": "src/priority.rs",
+      "exports": ["CommandQueue", "SourceLockout", "LockoutStatus", "CommandProcessor"]
+    },
+    "transition": {
+      "path": "src/transition.rs",
+      "exports": ["TransitionManager", "LockStatus", "TransitionProgress"]
+    },
+    "throttle": {
+      "path": "src/throttle.rs",
+      "exports": ["ThrottleController", "ThrottleState"]
+    },
+    "strategy_dyn": {
+      "path": "src/strategy_dyn.rs",
+      "exports": ["ExecutionStrategyDyn", "AnyStrategy"]
+    },
+    "traits/hardware": {
+      "path": "src/traits/hardware.rs",
+      "exports": ["Direction", "MotorController", "EncoderInput", "FaultDetector", "FaultKind", "Clock", "Delay"]
+    },
+    "traits/network": {
+      "path": "src/traits/network.rs",
+      "exports": ["MqttClient", "MqttMessage", "HttpServer", "HttpRequest", "HttpResponse", "HttpMethod"]
+    },
+    "traits/strategy": {
+      "path": "src/traits/strategy.rs",
+      "exports": ["TransitionLock", "InterruptBehavior", "ExecutionStrategy", "Immediate", "Linear", "EaseInOut", "Momentum"]
+    },
+    "hal/mock": {
+      "path": "src/hal/mock.rs",
+      "exports": ["MockMotor", "MockEncoder", "MockFault", "MockClock", "MockMqtt", "MockHttp"]
+    }
+  },
+  "types": {
+    "main_controller": {
+      "name": "ThrottleController<M>",
+      "methods": ["new", "apply_command", "update", "handle_fault", "clear_fault", "state", "current_speed", "current_direction", "is_transitioning", "has_fault"]
+    },
+    "strategies": {
+      "trait": "ExecutionStrategy",
+      "implementations": [
+        {"name": "Immediate", "constructors": ["default"]},
+        {"name": "Linear", "constructors": ["new", "locked", "source_locked"]},
+        {"name": "EaseInOut", "constructors": ["new", "departure", "arrival"]},
+        {"name": "Momentum", "constructors": ["new", "gentle", "responsive"]}
+      ]
+    },
+    "priority_system": {
+      "sources": ["Mqtt", "WebApi", "WebLocal", "Physical", "Fault", "Emergency"],
+      "locks": ["None", "Source", "Hard"],
+      "behaviors": ["Replace", "Queue", "Reject"]
+    }
+  },
+  "dependencies": {
+    "required": {
+      "heapless": "0.8"
+    },
+    "optional": {
+      "embassy-executor": "0.7",
+      "embassy-time": "0.4",
+      "embassy-sync": "0.6"
+    }
+  },
+  "features": {
+    "default": ["std"],
+    "std": [],
+    "esp32": ["dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync"]
+  },
+  "commands": {
+    "build": "cargo build",
+    "test": "cargo test",
+    "test_single": "cargo test {test_name}",
+    "check_no_std": "cargo check --no-default-features",
+    "build_esp32": "cargo build --target riscv32imc-unknown-none-elf --features esp32",
+    "lint": "cargo clippy"
+  },
+  "architecture": {
+    "flow": "CommandSource → SourceLockout → TransitionManager → MotorController",
+    "patterns": ["Strategy Pattern", "Type Erasure", "Priority Queue", "Hardware Abstraction Layer"],
+    "key_concepts": [
+      "E-stop auto-promotes to Emergency priority",
+      "Physical control creates lockout blocking remote commands",
+      "Transitions can be Hard-locked (only e-stop) or Source-locked",
+      "ThrottleCommand<S> converts to ThrottleCommandDyn via .into()"
+    ]
+  }
+}

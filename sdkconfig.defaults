@@ -1,0 +1,24 @@
+# ESP-IDF SDK configuration for ESP32-C3 SuperMini
+# Used by esp-idf-sys during build
+
+# Target configuration
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_IDF_TARGET_ESP32C3=y
+
+# Stack size for main task (8KB for comfortable headroom)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Enable Rust-friendly panic handler
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
+
+# WiFi configuration (used when wifi feature enabled)
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# LWIP for network stack
+CONFIG_LWIP_IPV4=y
+CONFIG_LWIP_IPV6=n
+
+# Console output
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

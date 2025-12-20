@@ -1,0 +1,22 @@
+# ESP32-C3 build configuration for rs-trainz
+# Target: SuperMini ESP32-C3 (RISC-V)
+
+[target.riscv32imc-esp-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+# rustflags set dynamically by Makefile via CARGO_TARGET_RISCV32IMC_ESP_ESPIDF_RUSTFLAGS
+
+[build]
+# Default target for ESP32 builds (override with --target for desktop)
+# target = "riscv32imc-esp-espidf"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+# ESP-IDF version to use
+ESP_IDF_VERSION = "v5.2.5"
+# MCU target
+MCU = "esp32c3"
+# Let esp-idf-sys download and manage ESP-IDF + toolchain automatically
+ESP_IDF_TOOLS_INSTALL_DIR = "global"

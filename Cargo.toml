@@ -1,0 +1,77 @@
+[package]
+name = "rs-trainz"
+version = "0.1.0"
+edition = "2021"
+description = "DC model train throttle controller with physical, web, and MQTT control"
+license = "MIT"
+readme = "README.md"
+keywords = ["embedded", "model-train", "throttle", "esp32", "no_std"]
+categories = ["embedded", "hardware-support", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+serde = ["dep:serde", "heapless/serde"]
+
+# Desktop web/MQTT (uses axum/rumqttc)
+web = ["std", "serde", "dep:axum", "dep:tokio", "dep:tower-http", "dep:serde_json"]
+mqtt = ["std", "serde", "dep:rumqttc", "dep:tokio", "dep:serde_json"]
+
+# ESP32 base hardware support
+esp32 = [
+    "std",
+    "dep:esp-idf-hal",
+    "dep:esp-idf-sys",
+    "dep:embedded-hal",
+]
+
+# ESP32 optional features
+display = ["dep:ssd1306", "dep:embedded-graphics", "dep:display-interface"]
+wifi = ["esp32", "dep:esp-idf-svc"]
+
+# ESP32 network services (requires wifi)
+esp32-http = ["wifi", "serde", "dep:serde_json"]
+esp32-mqtt = ["wifi", "serde", "dep:serde_json"]
+
+# Convenience: all ESP32 network features
+esp32-net = ["esp32-http", "esp32-mqtt"]
+
+[dependencies]
+# Core (no_std compatible)
+heapless = "0.8"
+
+# Web server (std only)
+axum = { version = "0.7", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time"], optional = true }
+tower-http = { version = "0.5", features = ["cors", "fs"], optional = true }
+
+# MQTT client (std only)
+rumqttc = { version = "0.24", optional = true }
+
+# Serialization (for web/mqtt)
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
+# ESP32-C3 hardware support (esp-idf based)
+# Using latest available versions
+esp-idf-hal = { version = "0.45", optional = true }
+esp-idf-sys = { version = "0.36", optional = true, features = ["binstart"] }
+esp-idf-svc = { version = "0.50", optional = true }
+embedded-hal = { version = "1.0", optional = true }
+
+# Display support (SSD1306 OLED)
+ssd1306 = { version = "0.8", optional = true }
+embedded-graphics = { version = "0.8", optional = true }
+display-interface = { version = "0.4", optional = true }
+
+# Error handling
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower = "0.5"
+
+[[bin]]
+name = "esp32_main"
+path = "src/bin/esp32_main.rs"
+required-features = ["esp32"]

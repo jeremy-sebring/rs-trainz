@@ -1,0 +1,251 @@
+//! Hardware abstraction traits for motor control, encoder input, and fault detection.
+//!
+//! This module defines the core hardware interfaces that allow rs-trainz to
+//! work across different platforms (ESP32, desktop mocks, etc.).
+//!
+//! # Key Traits
+//!
+//! | Trait | Purpose |
+//! |-------|---------|
+//! | [`MotorController`] | PWM-based DC motor control |
+//! | [`EncoderInput`] | Rotary encoder for physical UI |
+//! | [`FaultDetector`] | Overcurrent and short circuit detection |
+//! | [`Clock`] | Time source for `no_std` environments |
+//! | [`Delay`] | Async delay for embedded systems |
+//!
+//! # Implementation
+//!
+//! For testing and desktop development, use the mock implementations
+//! from [`crate::hal::mock`]. For ESP32 hardware, use the
+//! implementations from `hal::esp32` (requires `esp32` feature).
+//!
+//! # Example
+//!
+//! ```rust
+//! use rs_trainz::traits::{MotorController, Direction};
+//! use rs_trainz::hal::MockMotor;
+//!
+//! let mut motor = MockMotor::new();
+//! motor.set_direction(Direction::Forward).unwrap();
+//! motor.set_speed(0.5).unwrap();
+//!
+//! // Check current draw
+//! if let Ok(Some(current)) = motor.read_current_ma() {
+//!     println!("Current: {}mA", current);
+//! }
+//! ```
+
+/// Direction of train travel.
+///
+/// Controls the polarity of the motor output. For DC motors, this typically
+/// means swapping the H-bridge outputs.
+///
+/// # Default
+///
+/// Defaults to [`Stopped`](Self::Stopped) for safety.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Direction {
+    /// Moving forward (positive polarity).
+    Forward,
+    /// Moving in reverse (negative polarity).
+    Reverse,
+    /// Not moving (motor stopped).
+    ///
+    /// May also apply braking depending on motor driver.
+    #[default]
+    Stopped,
+}
+
+/// Motor controller trait - abstracts PWM-based DC motor control.
+///
+/// Implement this trait for your motor driver hardware. The trait handles
+/// speed (via PWM duty cycle) and direction (via H-bridge control).
+///
+/// # Implementation Notes
+///
+/// - Speed should be clamped to 0.0-1.0 before applying to PWM
+/// - Direction changes should be applied atomically with motor disabled
+/// - Current sensing is optional; return `Ok(None)` if not available
+///
+/// # Example Implementation
+///
+/// ```rust,ignore
+/// use rs_trainz::traits::{MotorController, Direction};
+///
+/// struct MyMotor { /* hardware handles */ }
+///
+/// impl MotorController for MyMotor {
+///     type Error = ();
+///
+///     fn set_speed(&mut self, speed: f32) -> Result<(), ()> {
+///         let duty = (speed.clamp(0.0, 1.0) * 255.0) as u8;
+///         // Set PWM duty cycle...
+///         Ok(())
+///     }
+///
+///     fn set_direction(&mut self, dir: Direction) -> Result<(), ()> {
+///         // Set H-bridge pins...
+///         Ok(())
+///     }
+///
+///     fn read_current_ma(&self) -> Result<Option<u32>, ()> {
+///         // Read ADC for current sense...
+///         Ok(Some(500))
+///     }
+/// }
+/// ```
+pub trait MotorController {
+    /// Error type for motor operations.
+    type Error;
+
+    /// Set speed as 0.0 to 1.0 (percentage of max voltage).
+    ///
+    /// Values outside this range should be clamped.
+    fn set_speed(&mut self, speed: f32) -> Result<(), Self::Error>;
+
+    /// Set direction of travel.
+    ///
+    /// This controls the H-bridge polarity. For safety, consider
+    /// disabling the motor briefly during direction changes.
+    fn set_direction(&mut self, dir: Direction) -> Result<(), Self::Error>;
+
+    /// Read current draw in milliamps (if hardware supports it).
+    ///
+    /// Returns `Ok(None)` if current sensing is not available.
+    fn read_current_ma(&self) -> Result<Option<u32>, Self::Error>;
+
+    /// Convenience method to stop the motor.
+    ///
+    /// Sets speed to 0 and direction to [`Direction::Stopped`].
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.set_speed(0.0)?;
+        self.set_direction(Direction::Stopped)
+    }
+}
+
+/// Rotary encoder input trait.
+///
+/// Abstracts a rotary encoder with push button for physical throttle control.
+/// Typically connected to GPIO pins with hardware or software debouncing.
+///
+/// # Implementation Notes
+///
+/// - `read_delta()` should return accumulated clicks and reset the counter
+/// - Positive values = clockwise rotation (speed increase)
+/// - The button is typically used for e-stop or menu selection
+pub trait EncoderInput {
+    /// Returns delta clicks since last call (positive = clockwise).
+    ///
+    /// This should reset the internal counter after reading.
+    fn read_delta(&mut self) -> i32;
+
+    /// Returns true if the encoder button is currently pressed.
+    fn button_pressed(&self) -> bool;
+
+    /// Returns true if button was just pressed (edge detection).
+    ///
+    /// Default implementation just returns `button_pressed()`.
+    /// Override for proper edge detection.
+    fn button_just_pressed(&mut self) -> bool {
+        self.button_pressed()
+    }
+}
+
+/// Fault detection trait for short circuits and overcurrent.
+///
+/// Monitors the motor driver for dangerous conditions. When a fault
+/// is detected, the throttle controller should immediately stop the motor.
+///
+/// # Implementation Notes
+///
+/// - Short circuit detection typically uses a dedicated fault pin
+/// - Overcurrent uses ADC current sense with configurable threshold
+/// - Some motor drivers (like BTS7960) have built-in protection
+pub trait FaultDetector {
+    /// Returns true if a short circuit is detected.
+    ///
+    /// This typically indicates a dead short on the track or derailment.
+    fn is_short_circuit(&self) -> bool;
+
+    /// Returns true if current exceeds safe threshold.
+    ///
+    /// Threshold should be set based on motor and track capacity.
+    fn is_overcurrent(&self) -> bool;
+
+    /// Returns the fault current in milliamps if available.
+    ///
+    /// Useful for logging and diagnostics.
+    fn fault_current_ma(&self) -> Option<u32>;
+
+    /// Returns any active fault.
+    ///
+    /// Prioritizes short circuit over overcurrent.
+    fn active_fault(&self) -> Option<FaultKind> {
+        if self.is_short_circuit() {
+            Some(FaultKind::ShortCircuit)
+        } else if self.is_overcurrent() {
+            Some(FaultKind::Overcurrent)
+        } else {
+            None
+        }
+    }
+}
+
+/// Types of faults that can occur.
+///
+/// Used by [`FaultDetector`] and [`ThrottleController`] to represent
+/// dangerous conditions that require motor shutdown.
+///
+/// [`ThrottleController`]: crate::ThrottleController
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum FaultKind {
+    /// Short circuit detected.
+    ///
+    /// Typically indicates a dead short on the track, derailed train,
+    /// or damaged wiring. Motor should be stopped immediately.
+    ShortCircuit,
+
+    /// Current exceeds safe threshold.
+    ///
+    /// The motor is drawing more current than configured safe limit.
+    /// May indicate overload, stall, or partial short.
+    Overcurrent,
+}
+
+/// Time source trait for `no_std` compatibility.
+///
+/// Provides monotonic time in milliseconds for transition timing.
+/// On desktop, this can wrap `std::time::Instant`. On embedded,
+/// use a hardware timer.
+///
+/// # Example
+///
+/// ```rust
+/// use rs_trainz::traits::Clock;
+/// use rs_trainz::hal::MockClock;
+///
+/// let mut clock = MockClock::new();
+/// assert_eq!(clock.now_ms(), 0);
+///
+/// clock.advance(100);
+/// assert_eq!(clock.now_ms(), 100);
+/// ```
+pub trait Clock {
+    /// Returns current time in milliseconds since an arbitrary epoch.
+    ///
+    /// Must be monotonically increasing.
+    fn now_ms(&self) -> u64;
+}
+
+/// Async delay trait for embedded systems.
+///
+/// Used for non-blocking delays in async contexts. On ESP32,
+/// this typically wraps the embassy timer.
+pub trait Delay {
+    /// Delay for the specified number of milliseconds.
+    fn delay_ms(&mut self, ms: u32) -> impl core::future::Future<Output = ()>;
+}
