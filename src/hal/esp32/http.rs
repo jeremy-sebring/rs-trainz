@@ -35,18 +35,10 @@ use std::sync::{Arc, Mutex};
 
 // Import shared helpers from http_handler (when available)
 #[cfg(any(feature = "web", feature = "mqtt"))]
-use crate::services::http_handler::{direction_str, state_to_json};
+use crate::services::http_handler::state_to_json;
 
-// Fallback for when services aren't available
-#[cfg(not(any(feature = "web", feature = "mqtt")))]
-fn direction_str(dir: &crate::Direction) -> &'static str {
-    match dir {
-        crate::Direction::Forward => "forward",
-        crate::Direction::Reverse => "reverse",
-        crate::Direction::Stopped => "stopped",
-    }
-}
-
+// Fallback state_to_json for when services module isn't available.
+// Direction::as_str() is always available from the core crate.
 #[cfg(not(any(feature = "web", feature = "mqtt")))]
 fn state_to_json(state: &ThrottleState) -> String {
     let target = state.target_speed.unwrap_or(state.speed);
@@ -55,7 +47,7 @@ fn state_to_json(state: &ThrottleState) -> String {
         r#"{{"speed":{:.2},"target_speed":{:.2},"direction":"{}","max_speed":{:.2},"is_transitioning":{}}}"#,
         state.speed,
         target,
-        direction_str(&state.direction),
+        state.direction.as_str(),
         state.max_speed,
         is_transitioning
     )

@@ -58,6 +58,68 @@ pub enum Direction {
     Stopped,
 }
 
+impl Direction {
+    /// Returns the direction as a lowercase string.
+    ///
+    /// This is useful for JSON serialization and display purposes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rs_trainz::Direction;
+    ///
+    /// assert_eq!(Direction::Forward.as_str(), "forward");
+    /// assert_eq!(Direction::Reverse.as_str(), "reverse");
+    /// assert_eq!(Direction::Stopped.as_str(), "stopped");
+    /// ```
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Direction::Forward => "forward",
+            Direction::Reverse => "reverse",
+            Direction::Stopped => "stopped",
+        }
+    }
+
+    /// Parse direction from text input.
+    ///
+    /// Supports multiple text formats for flexibility:
+    /// - Full names: `"forward"`, `"reverse"`, `"stopped"`
+    /// - Abbreviations: `"fwd"`, `"rev"`, `"stop"`
+    /// - Numeric: `"1"` (forward), `"-1"` (reverse), `"0"` (stopped)
+    ///
+    /// Input is trimmed and case-insensitive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rs_trainz::Direction;
+    ///
+    /// assert_eq!(Direction::from_text("forward"), Some(Direction::Forward));
+    /// assert_eq!(Direction::from_text("fwd"), Some(Direction::Forward));
+    /// assert_eq!(Direction::from_text("1"), Some(Direction::Forward));
+    ///
+    /// assert_eq!(Direction::from_text("reverse"), Some(Direction::Reverse));
+    /// assert_eq!(Direction::from_text("rev"), Some(Direction::Reverse));
+    /// assert_eq!(Direction::from_text("-1"), Some(Direction::Reverse));
+    ///
+    /// assert_eq!(Direction::from_text("stopped"), Some(Direction::Stopped));
+    /// assert_eq!(Direction::from_text("stop"), Some(Direction::Stopped));
+    /// assert_eq!(Direction::from_text("0"), Some(Direction::Stopped));
+    ///
+    /// assert_eq!(Direction::from_text("invalid"), None);
+    /// assert_eq!(Direction::from_text("  FWD  "), Some(Direction::Forward));
+    /// ```
+    pub fn from_text(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "forward" | "fwd" | "1" => Some(Direction::Forward),
+            "reverse" | "rev" | "-1" => Some(Direction::Reverse),
+            "stopped" | "stop" | "0" => Some(Direction::Stopped),
+            _ => None,
+        }
+    }
+}
+
 /// Motor controller trait - abstracts PWM-based DC motor control.
 ///
 /// Implement this trait for your motor driver hardware. The trait handles
@@ -293,6 +355,52 @@ mod tests {
         assert_ne!(Direction::Forward, Direction::Reverse);
         assert_ne!(Direction::Forward, Direction::Stopped);
         assert_ne!(Direction::Reverse, Direction::Stopped);
+    }
+
+    #[test]
+    fn direction_from_text_full_names() {
+        assert_eq!(Direction::from_text("forward"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("reverse"), Some(Direction::Reverse));
+        assert_eq!(Direction::from_text("stopped"), Some(Direction::Stopped));
+    }
+
+    #[test]
+    fn direction_from_text_abbreviations() {
+        assert_eq!(Direction::from_text("fwd"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("rev"), Some(Direction::Reverse));
+        assert_eq!(Direction::from_text("stop"), Some(Direction::Stopped));
+    }
+
+    #[test]
+    fn direction_from_text_numeric() {
+        assert_eq!(Direction::from_text("1"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("-1"), Some(Direction::Reverse));
+        assert_eq!(Direction::from_text("0"), Some(Direction::Stopped));
+    }
+
+    #[test]
+    fn direction_from_text_case_insensitive() {
+        assert_eq!(Direction::from_text("FORWARD"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("Forward"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("FWD"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("REVERSE"), Some(Direction::Reverse));
+        assert_eq!(Direction::from_text("STOPPED"), Some(Direction::Stopped));
+    }
+
+    #[test]
+    fn direction_from_text_whitespace() {
+        assert_eq!(Direction::from_text("  forward  "), Some(Direction::Forward));
+        assert_eq!(Direction::from_text("\tfwd\n"), Some(Direction::Forward));
+        assert_eq!(Direction::from_text(" 1 "), Some(Direction::Forward));
+    }
+
+    #[test]
+    fn direction_from_text_invalid() {
+        assert_eq!(Direction::from_text(""), None);
+        assert_eq!(Direction::from_text("invalid"), None);
+        assert_eq!(Direction::from_text("f"), None);
+        assert_eq!(Direction::from_text("2"), None);
+        assert_eq!(Direction::from_text("forwards"), None);
     }
 
     // =========================================================================

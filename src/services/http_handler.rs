@@ -231,19 +231,18 @@ pub fn state_to_json(state: &ThrottleState) -> String {
         r#"{{"speed":{:.2},"target_speed":{:.2},"direction":"{}","max_speed":{:.2},"is_transitioning":{}}}"#,
         state.speed,
         target,
-        direction_str(&state.direction),
+        state.direction.as_str(),
         state.max_speed,
         is_transitioning
     )
 }
 
 /// Convert direction to string.
+///
+/// This delegates to [`Direction::as_str()`] for consistency.
+#[inline]
 pub fn direction_str(dir: &Direction) -> &'static str {
-    match dir {
-        Direction::Forward => "forward",
-        Direction::Reverse => "reverse",
-        Direction::Stopped => "stopped",
-    }
+    dir.as_str()
 }
 
 /// Convert command outcome to JSON.

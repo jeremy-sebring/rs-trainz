@@ -20,11 +20,11 @@
 use std::sync::Arc;
 
 use crate::config::MqttConfig;
-use crate::messages::{parse_direction_request, parse_max_speed_request, parse_speed_request};
-use crate::traits::{EaseInOut, Linear, MotorController, MqttClient};
-use crate::{CommandSource, Direction, ThrottleCommand, ThrottleCommandDyn};
+use crate::messages::parse_mqtt_command;
+use crate::traits::{MotorController, MqttClient};
+use crate::{CommandSource, Direction, ThrottleCommandDyn};
 
-use super::http_handler::{direction_str, state_to_json};
+use super::http_handler::state_to_json;
 use super::SharedThrottleState;
 
 // ============================================================================
@@ -132,7 +132,7 @@ where
         self.client
             .publish(&speed_topic, speed_str.as_bytes(), true)?;
 
-        let dir_str = direction_str(&state.direction);
+        let dir_str = state.direction.as_str();
         let direction_topic = self.topic("direction");
         self.client
             .publish(&direction_topic, dir_str.as_bytes(), true)?;
@@ -157,69 +157,11 @@ where
 
     /// Parse an MQTT message into a command.
     ///
-    /// Supports JSON format with transitions:
-    /// - `{"speed": 0.5, "duration_ms": 1000, "smooth": true}`
-    /// - Falls back to plain text: `0.5`
+    /// Delegates to the consolidated `parse_mqtt_command` function in `messages.rs`.
     fn parse_message(&self, topic: &str, payload: &[u8]) -> Option<ThrottleCommandDyn> {
         let prefix = self.config.topic_prefix.as_str();
         let suffix = topic.strip_prefix(prefix)?.strip_prefix('/')?;
-
-        match suffix {
-            "speed/set" => {
-                // Try JSON first
-                if let Some(req) = parse_speed_request(payload) {
-                    let speed = req.speed.clamp(0.0, 1.0);
-                    return Some(if req.duration_ms > 0 {
-                        if req.smooth {
-                            ThrottleCommand::SetSpeed {
-                                target: speed,
-                                strategy: EaseInOut::new(req.duration_ms),
-                            }
-                            .into()
-                        } else {
-                            ThrottleCommand::SetSpeed {
-                                target: speed,
-                                strategy: Linear::new(req.duration_ms),
-                            }
-                            .into()
-                        }
-                    } else {
-                        ThrottleCommand::speed_immediate(speed).into()
-                    });
-                }
-                // Fall back to plain text
-                let payload_str = core::str::from_utf8(payload).ok()?;
-                let speed: f32 = payload_str.trim().parse().ok()?;
-                Some(ThrottleCommand::speed_immediate(speed.clamp(0.0, 1.0)).into())
-            }
-            "direction/set" => {
-                // Try JSON first
-                if let Some(req) = parse_direction_request(payload) {
-                    return Some(ThrottleCommandDyn::SetDirection(req.direction));
-                }
-                // Fall back to plain text
-                let payload_str = core::str::from_utf8(payload).ok()?.trim();
-                let dir = match payload_str {
-                    "forward" | "fwd" | "1" => Direction::Forward,
-                    "reverse" | "rev" | "-1" => Direction::Reverse,
-                    "stop" | "stopped" | "0" => Direction::Stopped,
-                    _ => return None,
-                };
-                Some(ThrottleCommandDyn::SetDirection(dir))
-            }
-            "estop" => Some(ThrottleCommandDyn::EmergencyStop),
-            "max-speed/set" => {
-                // Try JSON first
-                if let Some(req) = parse_max_speed_request(payload) {
-                    return Some(ThrottleCommandDyn::SetMaxSpeed(req.max_speed.clamp(0.0, 1.0)));
-                }
-                // Fall back to plain text
-                let payload_str = core::str::from_utf8(payload).ok()?;
-                let max_speed: f32 = payload_str.trim().parse().ok()?;
-                Some(ThrottleCommandDyn::SetMaxSpeed(max_speed.clamp(0.0, 1.0)))
-            }
-            _ => None,
-        }
+        parse_mqtt_command(suffix, payload)
     }
 }
 

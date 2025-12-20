@@ -40,9 +40,13 @@ use super::shared::SharedThrottleState;
 // Configuration
 // ============================================================================
 
-/// MQTT client configuration
+/// Runtime MQTT client configuration for `rumqttc`.
+///
+/// This struct uses `String` for runtime compatibility with the `rumqttc` library.
+/// For embedded/no-alloc contexts, use [`crate::config::MqttConfig`] which uses
+/// fixed-size `ShortString` types and convert with [`MqttRuntimeConfig::from_config`].
 #[derive(Debug, Clone)]
-pub struct MqttConfig {
+pub struct MqttRuntimeConfig {
     /// MQTT broker hostname
     pub host: String,
     /// MQTT broker port
@@ -57,7 +61,7 @@ pub struct MqttConfig {
     pub keep_alive_secs: u16,
 }
 
-impl Default for MqttConfig {
+impl Default for MqttRuntimeConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
@@ -70,7 +74,7 @@ impl Default for MqttConfig {
     }
 }
 
-impl MqttConfig {
+impl MqttRuntimeConfig {
     /// Create a new config with the given broker address
     pub fn new(host: impl Into<String>, port: u16) -> Self {
         Self {
@@ -128,14 +132,14 @@ pub type MqttState<M> = SharedThrottleState<M>;
 /// MQTT handler that bridges MQTT messages to the throttle controller
 pub struct MqttHandler<M: MotorController + Send + 'static> {
     state: Arc<SharedThrottleState<M>>,
-    config: MqttConfig,
+    config: MqttRuntimeConfig,
 }
 
 impl<M: MotorController + Send + 'static> MqttHandler<M> {
     /// Create a new MQTT handler with its own state.
     ///
     /// For sharing state with the web server, use `with_shared_state()` instead.
-    pub fn new(controller: ThrottleController<M>, config: MqttConfig) -> Self {
+    pub fn new(controller: ThrottleController<M>, config: MqttRuntimeConfig) -> Self {
         Self {
             state: Arc::new(SharedThrottleState::new(controller)),
             config,
@@ -156,7 +160,7 @@ impl<M: MotorController + Send + 'static> MqttHandler<M> {
     /// let web_router = build_router(Arc::clone(&state), &web_config);
     /// let mqtt_handler = MqttHandler::with_shared_state(Arc::clone(&state), mqtt_config);
     /// ```
-    pub fn with_shared_state(state: Arc<SharedThrottleState<M>>, config: MqttConfig) -> Self {
+    pub fn with_shared_state(state: Arc<SharedThrottleState<M>>, config: MqttRuntimeConfig) -> Self {
         Self { state, config }
     }
 
@@ -395,12 +399,12 @@ mod tests {
     use crate::ThrottleController;
 
     // ========================================================================
-    // MqttConfig tests
+    // MqttRuntimeConfig tests
     // ========================================================================
 
     #[test]
     fn test_mqtt_config_default() {
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 1883);
         assert_eq!(config.client_id, "rs-trainz");
@@ -411,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_config_new() {
-        let config = MqttConfig::new("mqtt.example.com", 8883);
+        let config = MqttRuntimeConfig::new("mqtt.example.com", 8883);
         assert_eq!(config.host, "mqtt.example.com");
         assert_eq!(config.port, 8883);
         // Other fields should be defaults
@@ -421,25 +425,25 @@ mod tests {
 
     #[test]
     fn test_mqtt_config_builder_client_id() {
-        let config = MqttConfig::default().client_id("test-client");
+        let config = MqttRuntimeConfig::default().client_id("test-client");
         assert_eq!(config.client_id, "test-client");
     }
 
     #[test]
     fn test_mqtt_config_builder_topic_prefix() {
-        let config = MqttConfig::default().topic_prefix("locomotive");
+        let config = MqttRuntimeConfig::default().topic_prefix("locomotive");
         assert_eq!(config.topic_prefix, "locomotive");
     }
 
     #[test]
     fn test_mqtt_config_builder_heartbeat() {
-        let config = MqttConfig::default().heartbeat_ms(10000);
+        let config = MqttRuntimeConfig::default().heartbeat_ms(10000);
         assert_eq!(config.heartbeat_ms, 10000);
     }
 
     #[test]
     fn test_mqtt_config_builder_chaining() {
-        let config = MqttConfig::new("broker.local", 1883)
+        let config = MqttRuntimeConfig::new("broker.local", 1883)
             .client_id("custom-id")
             .topic_prefix("my-train")
             .heartbeat_ms(2000);
@@ -453,14 +457,14 @@ mod tests {
 
     #[test]
     fn test_mqtt_config_topic() {
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         assert_eq!(config.topic("speed/set"), "train/speed/set");
         assert_eq!(config.topic("direction/set"), "train/direction/set");
     }
 
     #[test]
     fn test_mqtt_config_topic_custom_prefix() {
-        let config = MqttConfig::default().topic_prefix("locomotive");
+        let config = MqttRuntimeConfig::default().topic_prefix("locomotive");
         assert_eq!(config.topic("speed/set"), "locomotive/speed/set");
     }
 
@@ -480,7 +484,7 @@ mod tests {
             keep_alive_secs: 60,
         };
 
-        let config = MqttConfig::from_config(&shared_config);
+        let config = MqttRuntimeConfig::from_config(&shared_config);
         assert_eq!(config.host, "mqtt.test.com");
         assert_eq!(config.port, 8883);
         assert_eq!(config.client_id, "test-id");
@@ -497,7 +501,7 @@ mod tests {
     fn test_mqtt_handler_new() {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
 
         let handler = MqttHandler::new(controller, config);
         let state = handler.state();
@@ -513,7 +517,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
 
         let handler = MqttHandler::with_shared_state(Arc::clone(&state), config);
 
@@ -530,7 +534,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
 
         let handler = MqttHandler::with_shared_state(Arc::clone(&state), config);
 
@@ -622,7 +626,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, mut rx) = mpsc::channel::<StateUpdate>(32);
@@ -645,7 +649,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, mut rx) = mpsc::channel::<StateUpdate>(32);
@@ -687,7 +691,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -707,7 +711,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -724,7 +728,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -741,7 +745,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -758,7 +762,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -774,7 +778,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -790,7 +794,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -806,7 +810,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -822,7 +826,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -849,7 +853,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -877,7 +881,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -894,7 +898,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -912,7 +916,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default().topic_prefix("locomotive");
+        let config = MqttRuntimeConfig::default().topic_prefix("locomotive");
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);
@@ -932,7 +936,7 @@ mod tests {
         let motor = MockMotor::new();
         let controller = ThrottleController::new(motor);
         let state = Arc::new(SharedThrottleState::new(controller));
-        let config = MqttConfig::default();
+        let config = MqttRuntimeConfig::default();
         let handler = MqttHandler::with_shared_state(state.clone(), config);
 
         let (tx, _rx) = mpsc::channel::<StateUpdate>(32);

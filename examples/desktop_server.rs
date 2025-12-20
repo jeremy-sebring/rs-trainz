@@ -45,7 +45,7 @@ use rs_trainz::services::SharedThrottleState;
 use rs_trainz::services::WebServerConfig;
 
 #[cfg(feature = "mqtt")]
-use rs_trainz::services::{MqttConfig as ServiceMqttConfig, MqttHandler};
+use rs_trainz::services::{MqttHandler, MqttRuntimeConfig};
 
 fn main() {
     // Initialize the tokio runtime
@@ -126,7 +126,7 @@ async fn run_web_only(controller: ThrottleController<MockMotor>, config: &Config
 
 #[cfg(all(feature = "mqtt", not(feature = "web")))]
 async fn run_mqtt_only(controller: ThrottleController<MockMotor>, config: &Config) {
-    let mqtt_config = ServiceMqttConfig::from_config(&config.mqtt);
+    let mqtt_config = MqttRuntimeConfig::from_config(&config.mqtt);
 
     println!("Starting MQTT client...");
     println!("  Broker: {}:{}", mqtt_config.host, mqtt_config.port);
@@ -161,7 +161,7 @@ async fn run_mqtt_only(controller: ThrottleController<MockMotor>, config: &Confi
 #[cfg(all(feature = "web", feature = "mqtt"))]
 async fn run_web_and_mqtt(controller: ThrottleController<MockMotor>, config: &Config) {
     let web_config = WebServerConfig::from_config(&config.web);
-    let mqtt_config = ServiceMqttConfig::from_config(&config.mqtt);
+    let mqtt_config = MqttRuntimeConfig::from_config(&config.mqtt);
 
     println!("Starting web server and MQTT client with SHARED STATE...");
     println!();

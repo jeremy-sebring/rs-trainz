@@ -72,8 +72,7 @@ pub mod transition;
 /// Shared configuration system for desktop and ESP32.
 pub mod config;
 
-/// JSON parsing helpers for HTTP/MQTT API.
-pub mod parsing;
+
 
 /// Shared message types for HTTP/MQTT communication (serde-based).
 #[cfg(feature = "serde")]
