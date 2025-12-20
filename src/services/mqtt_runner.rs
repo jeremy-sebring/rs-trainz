@@ -152,7 +152,7 @@ where
 
     /// Build a full topic path.
     fn topic(&self, suffix: &str) -> String {
-        format!("{}/{}", self.config.topic_prefix, suffix)
+        self.config.topic(suffix).to_string()
     }
 
     /// Parse an MQTT message into a command.

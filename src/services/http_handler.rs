@@ -238,13 +238,6 @@ pub fn state_to_json(state: &ThrottleState) -> String {
 }
 
 /// Convert direction to string.
-///
-/// This delegates to [`Direction::as_str()`] for consistency.
-#[inline]
-pub fn direction_str(dir: &Direction) -> &'static str {
-    dir.as_str()
-}
-
 /// Convert command outcome to JSON.
 fn command_outcome_to_json(outcome: CommandOutcome) -> String {
     let result = match outcome {
@@ -366,13 +359,6 @@ mod tests {
     // ========================================================================
     // Helper function tests
     // ========================================================================
-
-    #[test]
-    fn test_direction_str() {
-        assert_eq!(direction_str(&Direction::Forward), "forward");
-        assert_eq!(direction_str(&Direction::Reverse), "reverse");
-        assert_eq!(direction_str(&Direction::Stopped), "stopped");
-    }
 
     #[test]
     fn test_api_result() {

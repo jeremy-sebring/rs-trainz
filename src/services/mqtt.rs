@@ -114,7 +114,10 @@ impl MqttRuntimeConfig {
         self
     }
 
-    fn topic(&self, suffix: &str) -> String {
+    /// Build a topic string with the configured prefix.
+    ///
+    /// This is the std equivalent of [`crate::config::MqttConfig::topic`].
+    pub fn topic(&self, suffix: &str) -> String {
         format!("{}/{}", self.topic_prefix, suffix)
     }
 }
