@@ -75,6 +75,10 @@ pub mod config;
 /// JSON parsing helpers for HTTP/MQTT API.
 pub mod parsing;
 
+/// Shared message types for HTTP/MQTT communication (serde-based).
+#[cfg(feature = "serde")]
+pub mod messages;
+
 /// Network services for HTTP API and MQTT (feature-gated).
 #[cfg(any(feature = "web", feature = "mqtt"))]
 pub mod services;
@@ -116,3 +120,11 @@ pub use transition::{LockStatus, TransitionManager, TransitionProgress};
 
 // Config re-exports
 pub use config::{Config, DeviceConfig, MqttConfig, ThrottleConfig, WebConfig, WifiConfig};
+
+// Message re-exports (for HTTP/MQTT APIs)
+#[cfg(feature = "serde")]
+pub use messages::{SetDirectionRequest, SetMaxSpeedRequest, SetSpeedRequest};
+
+// Parsing function re-exports (serde-json-core based)
+#[cfg(feature = "serde-json-core")]
+pub use messages::{parse_direction_request, parse_max_speed_request, parse_speed_request};

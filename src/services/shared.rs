@@ -33,7 +33,28 @@ use crate::{
     CommandOutcome, CommandSource, Direction, ThrottleCommandDyn, ThrottleController, ThrottleState,
 };
 
-use super::http_handler::StateProvider;
+// ============================================================================
+// State Provider Trait
+// ============================================================================
+
+/// Trait for providing throttle state access.
+///
+/// This abstraction allows services (HTTP, MQTT, etc.) to work with different
+/// state management strategies on different platforms.
+pub trait StateProvider: Send + Sync {
+    /// Get the current throttle state.
+    fn state(&self) -> ThrottleState;
+
+    /// Get the current timestamp in milliseconds.
+    fn now_ms(&self) -> u64;
+
+    /// Apply a command to the controller.
+    fn apply_command(
+        &self,
+        cmd: ThrottleCommandDyn,
+        source: CommandSource,
+    ) -> Result<CommandOutcome, ()>;
+}
 
 // ============================================================================
 // Change Detection

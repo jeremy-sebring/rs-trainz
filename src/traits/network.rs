@@ -262,3 +262,217 @@ impl HttpResponse {
         Self::error(400, message)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // HttpMethod Tests
+    // =========================================================================
+
+    #[test]
+    fn http_method_clone() {
+        let method = HttpMethod::Get;
+        let cloned = method.clone();
+        assert_eq!(method, cloned);
+    }
+
+    #[test]
+    fn http_method_copy() {
+        let method = HttpMethod::Post;
+        let copied = method;
+        assert_eq!(method, copied);
+    }
+
+    #[test]
+    fn http_method_debug() {
+        assert_eq!(format!("{:?}", HttpMethod::Get), "Get");
+        assert_eq!(format!("{:?}", HttpMethod::Post), "Post");
+        assert_eq!(format!("{:?}", HttpMethod::Put), "Put");
+        assert_eq!(format!("{:?}", HttpMethod::Delete), "Delete");
+    }
+
+    #[test]
+    fn http_method_equality() {
+        assert_eq!(HttpMethod::Get, HttpMethod::Get);
+        assert_eq!(HttpMethod::Post, HttpMethod::Post);
+        assert_eq!(HttpMethod::Put, HttpMethod::Put);
+        assert_eq!(HttpMethod::Delete, HttpMethod::Delete);
+        assert_ne!(HttpMethod::Get, HttpMethod::Post);
+        assert_ne!(HttpMethod::Put, HttpMethod::Delete);
+    }
+
+    // =========================================================================
+    // MqttMessage Tests
+    // =========================================================================
+
+    #[test]
+    fn mqtt_message_new_with_string() {
+        let msg = MqttMessage::new("test/topic", b"payload".to_vec());
+        assert_eq!(msg.topic, "test/topic");
+        assert_eq!(msg.payload, b"payload");
+    }
+
+    #[test]
+    fn mqtt_message_new_with_str() {
+        let msg = MqttMessage::new("another/topic", "text payload");
+        assert_eq!(msg.topic, "another/topic");
+        assert_eq!(msg.payload, b"text payload");
+    }
+
+    #[test]
+    fn mqtt_message_payload_str_valid_utf8() {
+        let msg = MqttMessage::new("topic", b"hello world");
+        assert_eq!(msg.payload_str(), Some("hello world"));
+    }
+
+    #[test]
+    fn mqtt_message_payload_str_invalid_utf8() {
+        let msg = MqttMessage {
+            topic: "topic".into(),
+            payload: vec![0xFF, 0xFE, 0xFD], // Invalid UTF-8
+        };
+        assert_eq!(msg.payload_str(), None);
+    }
+
+    #[test]
+    fn mqtt_message_clone() {
+        let msg = MqttMessage::new("topic", b"data");
+        let cloned = msg.clone();
+        assert_eq!(msg.topic, cloned.topic);
+        assert_eq!(msg.payload, cloned.payload);
+    }
+
+    #[test]
+    fn mqtt_message_debug() {
+        let msg = MqttMessage::new("test", vec![1, 2, 3]);
+        let debug_str = format!("{:?}", msg);
+        assert!(debug_str.contains("test"));
+        assert!(debug_str.contains("[1, 2, 3]"));
+    }
+
+    // =========================================================================
+    // HttpRequest Tests
+    // =========================================================================
+
+    #[test]
+    fn http_request_body_str_valid_utf8() {
+        let req = HttpRequest {
+            method: HttpMethod::Post,
+            path: "/api/test".into(),
+            body: Some(b"hello".to_vec()),
+        };
+        assert_eq!(req.body_str(), Some("hello"));
+    }
+
+    #[test]
+    fn http_request_body_str_no_body() {
+        let req = HttpRequest {
+            method: HttpMethod::Get,
+            path: "/api/test".into(),
+            body: None,
+        };
+        assert_eq!(req.body_str(), None);
+    }
+
+    #[test]
+    fn http_request_body_str_invalid_utf8() {
+        let req = HttpRequest {
+            method: HttpMethod::Post,
+            path: "/api/test".into(),
+            body: Some(vec![0xFF, 0xFE, 0xFD]), // Invalid UTF-8
+        };
+        assert_eq!(req.body_str(), None);
+    }
+
+    #[test]
+    fn http_request_debug() {
+        let req = HttpRequest {
+            method: HttpMethod::Get,
+            path: "/test".into(),
+            body: None,
+        };
+        let debug_str = format!("{:?}", req);
+        assert!(debug_str.contains("Get"));
+        assert!(debug_str.contains("/test"));
+    }
+
+    // =========================================================================
+    // HttpResponse Tests
+    // =========================================================================
+
+    #[test]
+    fn http_response_ok_json() {
+        let response = HttpResponse::ok_json(r#"{"status":"ok"}"#);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.body, br#"{"status":"ok"}"#);
+    }
+
+    #[test]
+    fn http_response_ok_html() {
+        let response = HttpResponse::ok_html("<h1>Hello</h1>");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "text/html");
+        assert_eq!(response.body, b"<h1>Hello</h1>");
+    }
+
+    #[test]
+    fn http_response_error() {
+        let response = HttpResponse::error(500, "internal error");
+        assert_eq!(response.status, 500);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.body, br#"{"error":"internal error"}"#);
+    }
+
+    #[test]
+    fn http_response_not_found() {
+        let response = HttpResponse::not_found();
+        assert_eq!(response.status, 404);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.body, br#"{"error":"not found"}"#);
+    }
+
+    #[test]
+    fn http_response_bad_request() {
+        let response = HttpResponse::bad_request("invalid input");
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.body, br#"{"error":"invalid input"}"#);
+    }
+
+    #[test]
+    fn http_response_debug() {
+        let response = HttpResponse::ok_json("{}");
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("200"));
+        assert!(debug_str.contains("application/json"));
+    }
+
+    #[test]
+    fn http_response_empty_json() {
+        let response = HttpResponse::ok_json("");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"");
+    }
+
+    #[test]
+    fn http_response_multiline_html() {
+        let html = "<html>\n  <body>Test</body>\n</html>";
+        let response = HttpResponse::ok_html(html);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, html.as_bytes());
+    }
+
+    #[test]
+    fn http_response_error_with_special_chars() {
+        let response = HttpResponse::error(403, "access denied: \"admin\" required");
+        assert_eq!(response.status, 403);
+        // The format! macro doesn't escape quotes in the string
+        assert_eq!(
+            response.body,
+            br#"{"error":"access denied: "admin" required"}"#
+        );
+    }
+}

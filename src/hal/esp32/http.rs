@@ -25,7 +25,8 @@
 //! ```
 
 use crate::config::WebConfig;
-use crate::parsing::{parse_direction_json, parse_speed_json};
+use crate::messages::{parse_direction_request, parse_speed_request};
+use crate::traits::{EaseInOut, Linear};
 use crate::{ThrottleCommand, ThrottleCommandDyn, ThrottleState};
 use esp_idf_hal::io::Write;
 use esp_idf_svc::http::server::{Configuration, EspHttpServer};
@@ -138,20 +139,35 @@ impl Esp32HttpServer {
             Ok::<_, EspIOError>(())
         })?;
 
-        // POST /api/speed - Set speed
+        // POST /api/speed - Set speed with optional transition
         server.fn_handler(
             "/api/speed",
             esp_idf_svc::http::Method::Post,
             move |mut req| {
                 let mut buf = [0u8; 128];
                 let len = req.read(&mut buf).unwrap_or(0);
-                let body = core::str::from_utf8(&buf[..len]).unwrap_or("");
 
-                if let Some(speed) = parse_speed_json(body) {
-                    if (0.0..=1.0).contains(&speed) {
+                if let Some(speed_req) = parse_speed_request(&buf[..len]) {
+                    if (0.0..=1.0).contains(&speed_req.speed) {
+                        let cmd = if speed_req.duration_ms > 0 {
+                            if speed_req.smooth {
+                                ThrottleCommand::SetSpeed {
+                                    target: speed_req.speed,
+                                    strategy: EaseInOut::new(speed_req.duration_ms),
+                                }
+                                .into()
+                            } else {
+                                ThrottleCommand::SetSpeed {
+                                    target: speed_req.speed,
+                                    strategy: Linear::new(speed_req.duration_ms),
+                                }
+                                .into()
+                            }
+                        } else {
+                            ThrottleCommand::speed_immediate(speed_req.speed).into()
+                        };
                         let mut state = state_for_speed.lock().unwrap();
-                        state.pending_command =
-                            Some(ThrottleCommand::speed_immediate(speed).into());
+                        state.pending_command = Some(cmd);
                         let mut resp = req.into_ok_response()?;
                         resp.write_all(b"{\"ok\":true,\"result\":\"applied\"}")?;
                     } else {
@@ -175,11 +191,10 @@ impl Esp32HttpServer {
             move |mut req| {
                 let mut buf = [0u8; 128];
                 let len = req.read(&mut buf).unwrap_or(0);
-                let body = core::str::from_utf8(&buf[..len]).unwrap_or("");
 
-                if let Some(dir) = parse_direction_json(body) {
+                if let Some(dir_req) = parse_direction_request(&buf[..len]) {
                     let mut state = state_for_dir.lock().unwrap();
-                    state.pending_command = Some(ThrottleCommandDyn::SetDirection(dir));
+                    state.pending_command = Some(ThrottleCommandDyn::SetDirection(dir_req.direction));
                     let mut resp = req.into_ok_response()?;
                     resp.write_all(b"{\"ok\":true,\"result\":\"direction_set\"}")?;
                 } else {

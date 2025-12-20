@@ -20,7 +20,8 @@
 use std::sync::Arc;
 
 use crate::config::MqttConfig;
-use crate::traits::{MotorController, MqttClient};
+use crate::messages::{parse_direction_request, parse_max_speed_request, parse_speed_request};
+use crate::traits::{EaseInOut, Linear, MotorController, MqttClient};
 use crate::{CommandSource, Direction, ThrottleCommand, ThrottleCommandDyn};
 
 use super::http_handler::{direction_str, state_to_json};
@@ -155,17 +156,48 @@ where
     }
 
     /// Parse an MQTT message into a command.
+    ///
+    /// Supports JSON format with transitions:
+    /// - `{"speed": 0.5, "duration_ms": 1000, "smooth": true}`
+    /// - Falls back to plain text: `0.5`
     fn parse_message(&self, topic: &str, payload: &[u8]) -> Option<ThrottleCommandDyn> {
         let prefix = self.config.topic_prefix.as_str();
         let suffix = topic.strip_prefix(prefix)?.strip_prefix('/')?;
 
         match suffix {
             "speed/set" => {
+                // Try JSON first
+                if let Some(req) = parse_speed_request(payload) {
+                    let speed = req.speed.clamp(0.0, 1.0);
+                    return Some(if req.duration_ms > 0 {
+                        if req.smooth {
+                            ThrottleCommand::SetSpeed {
+                                target: speed,
+                                strategy: EaseInOut::new(req.duration_ms),
+                            }
+                            .into()
+                        } else {
+                            ThrottleCommand::SetSpeed {
+                                target: speed,
+                                strategy: Linear::new(req.duration_ms),
+                            }
+                            .into()
+                        }
+                    } else {
+                        ThrottleCommand::speed_immediate(speed).into()
+                    });
+                }
+                // Fall back to plain text
                 let payload_str = core::str::from_utf8(payload).ok()?;
                 let speed: f32 = payload_str.trim().parse().ok()?;
                 Some(ThrottleCommand::speed_immediate(speed.clamp(0.0, 1.0)).into())
             }
             "direction/set" => {
+                // Try JSON first
+                if let Some(req) = parse_direction_request(payload) {
+                    return Some(ThrottleCommandDyn::SetDirection(req.direction));
+                }
+                // Fall back to plain text
                 let payload_str = core::str::from_utf8(payload).ok()?.trim();
                 let dir = match payload_str {
                     "forward" | "fwd" | "1" => Direction::Forward,
@@ -177,6 +209,11 @@ where
             }
             "estop" => Some(ThrottleCommandDyn::EmergencyStop),
             "max-speed/set" => {
+                // Try JSON first
+                if let Some(req) = parse_max_speed_request(payload) {
+                    return Some(ThrottleCommandDyn::SetMaxSpeed(req.max_speed.clamp(0.0, 1.0)));
+                }
+                // Fall back to plain text
                 let payload_str = core::str::from_utf8(payload).ok()?;
                 let max_speed: f32 = payload_str.trim().parse().ok()?;
                 Some(ThrottleCommandDyn::SetMaxSpeed(max_speed.clamp(0.0, 1.0)))
@@ -316,6 +353,102 @@ mod tests {
 
         let current = state.state();
         assert!(current.speed.abs() < 0.01);
+    }
+
+    // ========================================================================
+    // JSON speed command tests
+    // ========================================================================
+
+    #[test]
+    fn test_poll_with_speed_json_immediate() {
+        let (state, mut mqtt, config) = setup();
+
+        // JSON format with duration_ms = 0 means immediate
+        mqtt.queue_message("train/speed/set", br#"{"speed": 0.65}"#.to_vec());
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        let now = state.now_ms();
+        state.with_controller(|c| c.update(now).unwrap());
+
+        let current = state.state();
+        assert!((current.speed - 0.65).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_poll_with_speed_json_linear() {
+        let (state, mut mqtt, config) = setup();
+
+        // JSON format with duration_ms and smooth=false means linear
+        mqtt.queue_message(
+            "train/speed/set",
+            br#"{"speed": 0.8, "duration_ms": 1000, "smooth": false}"#.to_vec(),
+        );
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        // Should have target_speed set (transition in progress)
+        let current = state.state();
+        assert_eq!(current.target_speed, Some(0.8));
+    }
+
+    #[test]
+    fn test_poll_with_speed_json_smooth() {
+        let (state, mut mqtt, config) = setup();
+
+        // JSON format with duration_ms and smooth=true means EaseInOut
+        mqtt.queue_message(
+            "train/speed/set",
+            br#"{"speed": 0.9, "duration_ms": 2000, "smooth": true}"#.to_vec(),
+        );
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        // Should have target_speed set (transition in progress)
+        let current = state.state();
+        assert_eq!(current.target_speed, Some(0.9));
+    }
+
+    #[test]
+    fn test_poll_with_direction_json() {
+        let (state, mut mqtt, config) = setup();
+
+        mqtt.queue_message("train/direction/set", br#"{"direction": "forward"}"#.to_vec());
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        let current = state.state();
+        assert_eq!(current.direction, Direction::Forward);
+    }
+
+    #[test]
+    fn test_poll_with_direction_json_reverse() {
+        let (state, mut mqtt, config) = setup();
+
+        mqtt.queue_message("train/direction/set", br#"{"direction": "reverse"}"#.to_vec());
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        let current = state.state();
+        assert_eq!(current.direction, Direction::Reverse);
+    }
+
+    #[test]
+    fn test_poll_with_max_speed_json() {
+        let (state, mut mqtt, config) = setup();
+
+        mqtt.queue_message("train/max-speed/set", br#"{"max_speed": 0.85}"#.to_vec());
+        let mut runner = MqttServiceRunner::new(state.clone(), mqtt, config);
+
+        runner.poll().unwrap();
+
+        let current = state.state();
+        assert!((current.max_speed - 0.85).abs() < 0.01);
     }
 
     // ========================================================================

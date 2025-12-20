@@ -1,36 +1,39 @@
-//! JSON parsing helpers for HTTP/MQTT API.
+//! Simple JSON parsing helpers (legacy).
 //!
-//! Provides simple, allocation-free JSON parsing for throttle commands.
-//! These parsers handle the common request formats without requiring
-//! a full JSON parser.
+//! **Deprecated**: This module provides minimal, no-dependency JSON parsing.
+//! For new code, use the [`messages`](crate::messages) module with `serde-json-core`
+//! which provides full request type support including transitions.
 //!
-//! # Example
+//! # Migration
 //!
+//! Instead of:
+//! ```ignore
+//! use rs_trainz::parsing::parse_speed_json;
+//! let speed = parse_speed_json(r#"{"speed": 0.5}"#);
 //! ```
-//! use rs_trainz::parsing::{parse_speed_json, parse_direction_json};
-//! use rs_trainz::Direction;
 //!
-//! assert_eq!(parse_speed_json(r#"{"speed": 0.5}"#), Some(0.5));
-//! assert_eq!(parse_direction_json(r#"{"direction": "forward"}"#), Some(Direction::Forward));
+//! Use:
+//! ```ignore
+//! use rs_trainz::messages::parse_speed_request;
+//! let req = parse_speed_request(br#"{"speed": 0.5, "duration_ms": 1000}"#);
+//! // req.speed, req.duration_ms, req.smooth are all available
 //! ```
+//!
+//! # When to use this module
+//!
+//! Only use these functions when:
+//! - You cannot enable the `serde` feature
+//! - You only need the raw value, not full request types
 
 use crate::Direction;
 
 /// Parse a speed value from JSON like `{"speed": 0.5}`.
 ///
+/// **Deprecated**: Use [`messages::parse_speed_request`](crate::messages::parse_speed_request)
+/// for full request support including `duration_ms` and `smooth` fields.
+///
 /// Returns `None` if the JSON is malformed or the speed value is invalid.
-///
-/// # Examples
-///
-/// ```
-/// use rs_trainz::parsing::parse_speed_json;
-///
-/// assert_eq!(parse_speed_json(r#"{"speed": 0.5}"#), Some(0.5));
-/// assert_eq!(parse_speed_json(r#"{"speed": 1.0}"#), Some(1.0));
-/// assert_eq!(parse_speed_json(r#"{"speed": 0}"#), Some(0.0));
-/// assert_eq!(parse_speed_json(r#"{"other": 0.5}"#), None);
-/// assert_eq!(parse_speed_json("invalid"), None);
-/// ```
+#[deprecated(since = "0.2.0", note = "Use messages::parse_speed_request for full transition support")]
 pub fn parse_speed_json(json: &str) -> Option<f32> {
     // Find "speed" key
     let speed_start = json.find("\"speed\"")?;
@@ -48,17 +51,10 @@ pub fn parse_speed_json(json: &str) -> Option<f32> {
 
 /// Parse a max_speed value from JSON like `{"max_speed": 0.8}`.
 ///
+/// **Deprecated**: Use [`messages::parse_max_speed_request`](crate::messages::parse_max_speed_request).
+///
 /// Returns `None` if the JSON is malformed or the value is invalid.
-///
-/// # Examples
-///
-/// ```
-/// use rs_trainz::parsing::parse_max_speed_json;
-///
-/// assert_eq!(parse_max_speed_json(r#"{"max_speed": 0.8}"#), Some(0.8));
-/// assert_eq!(parse_max_speed_json(r#"{"max_speed": 1.0}"#), Some(1.0));
-/// assert_eq!(parse_max_speed_json(r#"{"other": 0.5}"#), None);
-/// ```
+#[deprecated(since = "0.2.0", note = "Use messages::parse_max_speed_request")]
 pub fn parse_max_speed_json(json: &str) -> Option<f32> {
     // Find "max_speed" key
     let start = json.find("\"max_speed\"")?;
@@ -76,19 +72,10 @@ pub fn parse_max_speed_json(json: &str) -> Option<f32> {
 
 /// Parse a direction from JSON like `{"direction": "forward"}`.
 ///
+/// **Deprecated**: Use [`messages::parse_direction_request`](crate::messages::parse_direction_request).
+///
 /// Returns `None` if the JSON is malformed or direction is invalid.
-///
-/// # Examples
-///
-/// ```
-/// use rs_trainz::parsing::parse_direction_json;
-/// use rs_trainz::Direction;
-///
-/// assert_eq!(parse_direction_json(r#"{"direction": "forward"}"#), Some(Direction::Forward));
-/// assert_eq!(parse_direction_json(r#"{"direction": "reverse"}"#), Some(Direction::Reverse));
-/// assert_eq!(parse_direction_json(r#"{"direction": "stopped"}"#), Some(Direction::Stopped));
-/// assert_eq!(parse_direction_json(r#"{"other": "forward"}"#), None);
-/// ```
+#[deprecated(since = "0.2.0", note = "Use messages::parse_direction_request")]
 pub fn parse_direction_json(json: &str) -> Option<Direction> {
     // Look for "direction" key followed by a value
     if !json.contains("\"direction\"") {

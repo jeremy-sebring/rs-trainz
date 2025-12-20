@@ -27,34 +27,13 @@
 use alloc::format;
 use alloc::string::String;
 
-use crate::parsing::{parse_direction_json, parse_max_speed_json, parse_speed_json};
-use crate::traits::Immediate;
+use crate::messages::{parse_direction_request, parse_max_speed_request, parse_speed_request};
+use crate::traits::{EaseInOut, Immediate, Linear};
 use crate::{CommandOutcome, CommandSource, Direction, ThrottleCommand, ThrottleState};
 
+use super::shared::StateProvider;
+
 extern crate alloc;
-
-// ============================================================================
-// State Provider Trait
-// ============================================================================
-
-/// Trait for providing throttle state access.
-///
-/// This abstraction allows the handler to work with different state
-/// management strategies on different platforms.
-pub trait StateProvider: Send + Sync {
-    /// Get the current throttle state.
-    fn state(&self) -> ThrottleState;
-
-    /// Get the current timestamp in milliseconds.
-    fn now_ms(&self) -> u64;
-
-    /// Apply a command to the controller.
-    fn apply_command(
-        &self,
-        cmd: crate::ThrottleCommandDyn,
-        source: CommandSource,
-    ) -> Result<CommandOutcome, ()>;
-}
 
 // ============================================================================
 // API Response Types
@@ -107,6 +86,24 @@ impl ApiResult {
     }
 }
 
+// Axum integration: allow ApiResult to be returned directly from handlers
+#[cfg(feature = "web")]
+impl axum::response::IntoResponse for ApiResult {
+    fn into_response(self) -> axum::response::Response {
+        use axum::http::{header, StatusCode};
+        use axum::response::Response;
+
+        let status = StatusCode::from_u16(self.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = self.body().to_string();
+
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap()
+    }
+}
+
 // ============================================================================
 // HTTP API Handler
 // ============================================================================
@@ -133,19 +130,39 @@ impl<S: StateProvider> HttpApiHandler<S> {
         state_to_json(&state)
     }
 
-    /// POST /api/speed - Set speed.
+    /// POST /api/speed - Set speed with optional transition.
     ///
-    /// Accepts JSON: `{"speed": 0.5}` or `{"speed": 0.5, "duration_ms": 1000}`
+    /// Accepts JSON:
+    /// - Immediate: `{"speed": 0.5}`
+    /// - Linear transition: `{"speed": 0.5, "duration_ms": 1000}`
+    /// - Smooth transition: `{"speed": 0.5, "duration_ms": 1000, "smooth": true}`
     pub fn handle_set_speed(&self, body: &str) -> ApiResult {
-        let Some(speed) = parse_speed_json(body) else {
-            return ApiResult::bad_request(r#"{"error":"invalid speed"}"#);
+        let Some(req) = parse_speed_request(body.as_bytes()) else {
+            return ApiResult::bad_request(r#"{"error":"invalid speed request"}"#);
         };
 
-        if !(0.0..=1.0).contains(&speed) {
+        if !(0.0..=1.0).contains(&req.speed) {
             return ApiResult::bad_request(r#"{"error":"speed must be between 0.0 and 1.0"}"#);
         }
 
-        let cmd = ThrottleCommand::speed_immediate(speed).into();
+        let cmd = if req.duration_ms > 0 {
+            if req.smooth {
+                ThrottleCommand::SetSpeed {
+                    target: req.speed,
+                    strategy: EaseInOut::new(req.duration_ms),
+                }
+                .into()
+            } else {
+                ThrottleCommand::SetSpeed {
+                    target: req.speed,
+                    strategy: Linear::new(req.duration_ms),
+                }
+                .into()
+            }
+        } else {
+            ThrottleCommand::speed_immediate(req.speed).into()
+        };
+
         match self.state.apply_command(cmd, CommandSource::WebApi) {
             Ok(outcome) => ApiResult::ok(command_outcome_to_json(outcome)),
             Err(_) => ApiResult::error(500, r#"{"error":"controller error"}"#),
@@ -154,13 +171,13 @@ impl<S: StateProvider> HttpApiHandler<S> {
 
     /// POST /api/direction - Set direction.
     ///
-    /// Accepts JSON: `{"direction": "forward"}` or `{"direction": "reverse"}`
+    /// Accepts JSON: `{"direction": "forward"}`, `{"direction": "reverse"}`, or `{"direction": "stopped"}`
     pub fn handle_set_direction(&self, body: &str) -> ApiResult {
-        let Some(direction) = parse_direction_json(body) else {
+        let Some(req) = parse_direction_request(body.as_bytes()) else {
             return ApiResult::bad_request(r#"{"error":"invalid direction"}"#);
         };
 
-        let cmd = ThrottleCommand::<Immediate>::SetDirection(direction).into();
+        let cmd = ThrottleCommand::<Immediate>::SetDirection(req.direction).into();
         match self.state.apply_command(cmd, CommandSource::WebApi) {
             Ok(_) => ApiResult::ok(r#"{"ok":true,"result":"direction_set"}"#),
             Err(_) => ApiResult::error(500, r#"{"error":"controller error"}"#),
@@ -180,15 +197,15 @@ impl<S: StateProvider> HttpApiHandler<S> {
     ///
     /// Accepts JSON: `{"max_speed": 0.8}`
     pub fn handle_set_max_speed(&self, body: &str) -> ApiResult {
-        let Some(max_speed) = parse_max_speed_json(body) else {
+        let Some(req) = parse_max_speed_request(body.as_bytes()) else {
             return ApiResult::bad_request(r#"{"error":"invalid max_speed"}"#);
         };
 
-        if !(0.0..=1.0).contains(&max_speed) {
+        if !(0.0..=1.0).contains(&req.max_speed) {
             return ApiResult::bad_request(r#"{"error":"max_speed must be between 0.0 and 1.0"}"#);
         }
 
-        let cmd = ThrottleCommand::<Immediate>::SetMaxSpeed(max_speed).into();
+        let cmd = ThrottleCommand::<Immediate>::SetMaxSpeed(req.max_speed).into();
         match self.state.apply_command(cmd, CommandSource::WebApi) {
             Ok(_) => ApiResult::ok(r#"{"ok":true,"result":"max_speed_set"}"#),
             Err(_) => ApiResult::error(500, r#"{"error":"controller error"}"#),

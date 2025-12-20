@@ -1,6 +1,10 @@
 //! Axum-based HTTP server for the throttle controller API.
 //!
-//! Provides REST endpoints for:
+//! This module provides a thin Axum wrapper around the shared [`HttpApiHandler`],
+//! which contains all the business logic for REST endpoints.
+//!
+//! # Endpoints
+//!
 //! - GET `/api/state` - Current throttle state
 //! - POST `/api/speed` - Set speed with optional transition
 //! - POST `/api/direction` - Set direction
@@ -17,16 +21,16 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, post},
-    Json, Router,
+    Router,
 };
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::WebConfig;
-use crate::parsing::{parse_direction_json, parse_max_speed_json, parse_speed_json};
-use crate::traits::{Immediate, MotorController};
-use crate::{CommandOutcome, CommandSource, ThrottleCommand, ThrottleController};
+use crate::traits::MotorController;
+use crate::ThrottleController;
 
-use super::api::{ApiResponse, CommandResponse, StateResponse};
+use super::api::ApiResponse;
+use super::http_handler::{ApiResult, HttpApiHandler};
 use super::shared::SharedThrottleState;
 
 // ============================================================================
@@ -36,139 +40,57 @@ use super::shared::SharedThrottleState;
 /// Type alias for backward compatibility.
 ///
 /// New code should use `SharedThrottleState` directly for clarity.
-/// This alias allows existing code using `AppState` to continue working.
 pub type AppState<M> = SharedThrottleState<M>;
 
 // ============================================================================
-// Route Handlers
+// Route Handlers (thin wrappers around HttpApiHandler)
 // ============================================================================
 
-/// GET /api/state - Returns current throttle state
+/// GET /api/state
 async fn get_state<M: MotorController + Send + 'static>(
     State(state): State<Arc<SharedThrottleState<M>>>,
-) -> Json<ApiResponse<StateResponse>> {
-    let throttle_state = state.state();
-    Json(ApiResponse::ok(StateResponse::from(&throttle_state)))
+) -> impl IntoResponse {
+    let handler = HttpApiHandler::new(Arc::clone(&state));
+    let json = handler.handle_get_state();
+    ApiResult::ok(json)
 }
 
-/// POST /api/speed - Set speed (immediate)
-///
-/// Accepts JSON: `{"speed": 0.5}`
-/// Uses the same simple parser as ESP32 for consistency.
+/// POST /api/speed
 async fn set_speed<M: MotorController + Send + 'static>(
     State(state): State<Arc<SharedThrottleState<M>>>,
     body: Bytes,
-) -> Json<ApiResponse<CommandResponse>> {
+) -> impl IntoResponse {
+    let handler = HttpApiHandler::new(Arc::clone(&state));
     let body_str = std::str::from_utf8(&body).unwrap_or("");
-
-    let Some(speed) = parse_speed_json(body_str) else {
-        return Json(ApiResponse::err("Invalid speed request"));
-    };
-
-    // Validate speed
-    if speed < 0.0 || speed > 1.0 {
-        return Json(ApiResponse::err("Speed must be between 0.0 and 1.0"));
-    }
-
-    let now_ms = state.now_ms();
-    let cmd = ThrottleCommand::speed_immediate(speed).into();
-
-    let result = state
-        .with_controller(|controller| controller.apply_command(cmd, CommandSource::WebApi, now_ms));
-
-    match result {
-        Ok(outcome) => {
-            let result = match outcome {
-                CommandOutcome::Applied => "applied",
-                CommandOutcome::SpeedTransition(r) => match r {
-                    crate::TransitionResult::Started => "transition_started",
-                    crate::TransitionResult::Queued => "queued",
-                    crate::TransitionResult::Interrupted { .. } => "interrupted_previous",
-                    crate::TransitionResult::Rejected { reason } => {
-                        return Json(ApiResponse::ok(CommandResponse::rejected(format!(
-                            "{:?}",
-                            reason
-                        ))));
-                    }
-                },
-            };
-            Json(ApiResponse::ok(CommandResponse::accepted(result)))
-        }
-        Err(_) => Json(ApiResponse::err("Motor controller error")),
-    }
+    handler.handle_set_speed(body_str)
 }
 
-/// POST /api/direction - Set direction
-///
-/// Accepts JSON: `{"direction": "forward"}` or `{"direction": "reverse"}`
-/// Uses the same simple parser as ESP32 for consistency.
+/// POST /api/direction
 async fn set_direction<M: MotorController + Send + 'static>(
     State(state): State<Arc<SharedThrottleState<M>>>,
     body: Bytes,
-) -> Json<ApiResponse<CommandResponse>> {
+) -> impl IntoResponse {
+    let handler = HttpApiHandler::new(Arc::clone(&state));
     let body_str = std::str::from_utf8(&body).unwrap_or("");
-
-    let Some(direction) = parse_direction_json(body_str) else {
-        return Json(ApiResponse::err("Invalid direction request"));
-    };
-
-    let now_ms = state.now_ms();
-    let cmd = ThrottleCommand::<Immediate>::SetDirection(direction).into();
-
-    let result = state
-        .with_controller(|controller| controller.apply_command(cmd, CommandSource::WebApi, now_ms));
-
-    match result {
-        Ok(_) => Json(ApiResponse::ok(CommandResponse::accepted("direction_set"))),
-        Err(_) => Json(ApiResponse::err("Motor controller error")),
-    }
+    handler.handle_set_direction(body_str)
 }
 
-/// POST /api/estop - Emergency stop
+/// POST /api/estop
 async fn emergency_stop<M: MotorController + Send + 'static>(
     State(state): State<Arc<SharedThrottleState<M>>>,
-) -> Json<ApiResponse<CommandResponse>> {
-    let now_ms = state.now_ms();
-    let cmd = ThrottleCommand::estop().into();
-
-    let result = state
-        .with_controller(|controller| controller.apply_command(cmd, CommandSource::WebApi, now_ms));
-
-    match result {
-        Ok(_) => Json(ApiResponse::ok(CommandResponse::accepted("emergency_stop"))),
-        Err(_) => Json(ApiResponse::err("Motor controller error")),
-    }
+) -> impl IntoResponse {
+    let handler = HttpApiHandler::new(Arc::clone(&state));
+    handler.handle_estop()
 }
 
-/// POST /api/max-speed - Set maximum allowed speed
-///
-/// Accepts JSON: `{"max_speed": 0.8}`
-/// Uses the same simple parser as other endpoints for consistency.
+/// POST /api/max-speed
 async fn set_max_speed<M: MotorController + Send + 'static>(
     State(state): State<Arc<SharedThrottleState<M>>>,
     body: Bytes,
-) -> Json<ApiResponse<CommandResponse>> {
+) -> impl IntoResponse {
+    let handler = HttpApiHandler::new(Arc::clone(&state));
     let body_str = std::str::from_utf8(&body).unwrap_or("");
-
-    let Some(max_speed) = parse_max_speed_json(body_str) else {
-        return Json(ApiResponse::err("Invalid max_speed request"));
-    };
-
-    // Validate max speed
-    if max_speed < 0.0 || max_speed > 1.0 {
-        return Json(ApiResponse::err("Max speed must be between 0.0 and 1.0"));
-    }
-
-    let now_ms = state.now_ms();
-    let cmd = ThrottleCommand::<Immediate>::SetMaxSpeed(max_speed).into();
-
-    let result = state
-        .with_controller(|controller| controller.apply_command(cmd, CommandSource::WebApi, now_ms));
-
-    match result {
-        Ok(_) => Json(ApiResponse::ok(CommandResponse::accepted("max_speed_set"))),
-        Err(_) => Json(ApiResponse::err("Motor controller error")),
-    }
+    handler.handle_set_max_speed(body_str)
 }
 
 /// GET / - Serve the web UI
@@ -180,12 +102,12 @@ async fn index() -> impl IntoResponse {
 async fn not_found() -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
-        Json(ApiResponse::<()>::err("Not found")),
+        axum::Json(ApiResponse::<()>::err("Not found")),
     )
 }
 
 // ============================================================================
-// Server Builder
+// Server Configuration
 // ============================================================================
 
 /// Configuration for the web server
@@ -263,7 +185,6 @@ pub fn build_router<M: MotorController + Send + 'static>(
 
 /// Start the web server
 ///
-/// This function blocks until the server is shut down.
 /// Creates its own `SharedThrottleState` - use `run_server_with_state` to share
 /// state with other services.
 pub async fn run_server<M: MotorController + Send + 'static>(
@@ -271,38 +192,493 @@ pub async fn run_server<M: MotorController + Send + 'static>(
     config: WebServerConfig,
 ) -> Result<(), std::io::Error> {
     let state = Arc::new(SharedThrottleState::new(controller));
-    let router = build_router(state, &config);
-
-    let listener = tokio::net::TcpListener::bind(config.addr).await?;
-    println!("Web server listening on http://{}", config.addr);
-
-    axum::serve(listener, router).await
+    run_server_with_state(state, config).await
 }
 
 /// Start the web server with shared state
 ///
-/// Use this when you need to share state with other services (MQTT, physical input).
-/// This is the recommended way to run the web server in a multi-service setup.
-///
-/// # Example
-///
-/// ```ignore
-/// let state = Arc::new(SharedThrottleState::new(controller));
-///
-/// // Share state with MQTT
-/// let mqtt_handler = MqttHandler::with_shared_state(Arc::clone(&state), mqtt_config);
-///
-/// // Run web server with same state
-/// run_server_with_state(state, web_config).await?;
-/// ```
+/// Use this when sharing state with other services (MQTT, physical input).
 pub async fn run_server_with_state<M: MotorController + Send + 'static>(
     state: Arc<SharedThrottleState<M>>,
     config: WebServerConfig,
 ) -> Result<(), std::io::Error> {
     let router = build_router(state, &config);
-
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
     println!("Web server listening on http://{}", config.addr);
-
     axum::serve(listener, router).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hal::MockMotor;
+    use crate::{CommandSource, Direction, ThrottleCommand};
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    // ========================================================================
+    // WebServerConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_web_server_config_default() {
+        let config = WebServerConfig::default();
+        assert_eq!(config.addr.to_string(), "0.0.0.0:8080");
+        assert!(config.cors_permissive);
+    }
+
+    #[test]
+    fn test_web_server_config_new() {
+        let addr: SocketAddr = "127.0.0.1:3000".parse().unwrap();
+        let config = WebServerConfig::new(addr);
+        assert_eq!(config.addr.to_string(), "127.0.0.1:3000");
+        assert!(config.cors_permissive);
+    }
+
+    #[test]
+    fn test_web_server_config_cors() {
+        let config = WebServerConfig::default().cors(false);
+        assert!(!config.cors_permissive);
+    }
+
+    #[test]
+    fn test_web_server_config_from_config() {
+        let web_config = crate::config::WebConfig {
+            enabled: true,
+            port: 9000,
+            cors_permissive: false,
+            poll_interval_ms: 20,
+        };
+        let config = WebServerConfig::from_config(&web_config);
+        assert_eq!(config.addr.port(), 9000);
+        assert!(!config.cors_permissive);
+    }
+
+    // ========================================================================
+    // Router tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_router_with_cors() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default().cors(true);
+        let _router = build_router(state, &config);
+    }
+
+    #[test]
+    fn test_build_router_without_cors() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default().cors(false);
+        let _router = build_router(state, &config);
+    }
+
+    // ========================================================================
+    // Route handler tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_state() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+
+        // Set specific state
+        let now = state.now_ms();
+        state.with_controller(|c| {
+            let cmd = ThrottleCommand::speed_immediate(0.5).into();
+            let _ = c.apply_command(cmd, CommandSource::Physical, now);
+            let _ = c.update(now);
+        });
+
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(Request::builder().uri("/api/state").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+
+        assert!(body_str.contains("\"speed\""));
+        assert!(body_str.contains("0.5"));
+    }
+
+    #[tokio::test]
+    async fn test_set_speed_valid() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state.clone(), &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"speed": 0.75}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let now = state.now_ms();
+        state.with_controller(|c| c.update(now).unwrap());
+        let current = state.state();
+        assert!((current.speed - 0.75).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_set_speed_invalid_range_high() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"speed": 1.5}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Bad request returns 400
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_set_speed_invalid_range_negative() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"speed": -0.1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_set_speed_invalid_json() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_set_direction_forward() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state.clone(), &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/direction")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"direction": "forward"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(state.state().direction, Direction::Forward);
+    }
+
+    #[tokio::test]
+    async fn test_set_direction_reverse() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state.clone(), &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/direction")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"direction": "reverse"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(state.state().direction, Direction::Reverse);
+    }
+
+    #[tokio::test]
+    async fn test_set_direction_invalid() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/direction")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"direction": "sideways"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_emergency_stop() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+
+        // Set initial speed
+        let now = state.now_ms();
+        state.with_controller(|c| {
+            let cmd = ThrottleCommand::speed_immediate(0.8).into();
+            let _ = c.apply_command(cmd, CommandSource::Physical, now);
+            let _ = c.update(now);
+        });
+
+        let config = WebServerConfig::default();
+        let app = build_router(state.clone(), &config);
+
+        let response = app
+            .oneshot(Request::builder().method("POST").uri("/api/estop").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let now = state.now_ms();
+        state.with_controller(|c| c.update(now).unwrap());
+        assert!(state.state().speed.abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_set_max_speed_valid() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state.clone(), &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/max-speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"max_speed": 0.8}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!((state.state().max_speed - 0.8).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_set_max_speed_invalid_range_high() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/max-speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"max_speed": 1.5}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_set_max_speed_invalid_range_negative() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/max-speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"max_speed": -0.1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_index_returns_html() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(body_str.contains("<!DOCTYPE html>") || body_str.contains("<html"));
+    }
+
+    #[tokio::test]
+    async fn test_not_found_handler() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(Request::builder().uri("/api/nonexistent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_cors_headers_when_enabled() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default().cors(true);
+        let app = build_router(state, &config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/state")
+                    .header("origin", "http://example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("access-control-allow-origin"));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_commands_sequential() {
+        let motor = MockMotor::new();
+        let controller = ThrottleController::new(motor);
+        let state = Arc::new(SharedThrottleState::new(controller));
+        let config = WebServerConfig::default();
+
+        // Set direction
+        let app = build_router(state.clone(), &config);
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/direction")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"direction": "forward"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Set speed
+        let app = build_router(state.clone(), &config);
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/speed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"speed": 0.6}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let now = state.now_ms();
+        state.with_controller(|c| c.update(now).unwrap());
+
+        let current = state.state();
+        assert_eq!(current.direction, Direction::Forward);
+        assert!((current.speed - 0.6).abs() < 0.01);
+    }
 }

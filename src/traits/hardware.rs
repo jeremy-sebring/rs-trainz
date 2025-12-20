@@ -249,3 +249,244 @@ pub trait Delay {
     /// Delay for the specified number of milliseconds.
     fn delay_ms(&mut self, ms: u32) -> impl core::future::Future<Output = ()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Direction Tests
+    // =========================================================================
+
+    #[test]
+    fn direction_default() {
+        let dir = Direction::default();
+        assert_eq!(dir, Direction::Stopped);
+    }
+
+    #[test]
+    fn direction_clone() {
+        let dir = Direction::Forward;
+        let cloned = dir.clone();
+        assert_eq!(dir, cloned);
+    }
+
+    #[test]
+    fn direction_copy() {
+        let dir = Direction::Reverse;
+        let copied = dir;
+        assert_eq!(dir, copied);
+    }
+
+    #[test]
+    fn direction_debug() {
+        assert_eq!(format!("{:?}", Direction::Forward), "Forward");
+        assert_eq!(format!("{:?}", Direction::Reverse), "Reverse");
+        assert_eq!(format!("{:?}", Direction::Stopped), "Stopped");
+    }
+
+    #[test]
+    fn direction_equality() {
+        assert_eq!(Direction::Forward, Direction::Forward);
+        assert_eq!(Direction::Reverse, Direction::Reverse);
+        assert_eq!(Direction::Stopped, Direction::Stopped);
+        assert_ne!(Direction::Forward, Direction::Reverse);
+        assert_ne!(Direction::Forward, Direction::Stopped);
+        assert_ne!(Direction::Reverse, Direction::Stopped);
+    }
+
+    // =========================================================================
+    // FaultKind Tests
+    // =========================================================================
+
+    #[test]
+    fn fault_kind_clone() {
+        let fault = FaultKind::ShortCircuit;
+        let cloned = fault.clone();
+        assert_eq!(fault, cloned);
+    }
+
+    #[test]
+    fn fault_kind_copy() {
+        let fault = FaultKind::Overcurrent;
+        let copied = fault;
+        assert_eq!(fault, copied);
+    }
+
+    #[test]
+    fn fault_kind_debug() {
+        assert_eq!(format!("{:?}", FaultKind::ShortCircuit), "ShortCircuit");
+        assert_eq!(format!("{:?}", FaultKind::Overcurrent), "Overcurrent");
+    }
+
+    #[test]
+    fn fault_kind_equality() {
+        assert_eq!(FaultKind::ShortCircuit, FaultKind::ShortCircuit);
+        assert_eq!(FaultKind::Overcurrent, FaultKind::Overcurrent);
+        assert_ne!(FaultKind::ShortCircuit, FaultKind::Overcurrent);
+    }
+
+    // =========================================================================
+    // MotorController Default Methods Tests
+    // =========================================================================
+
+    struct TestMotor {
+        speed: f32,
+        direction: Direction,
+        set_speed_called: bool,
+        set_direction_called: bool,
+    }
+
+    impl TestMotor {
+        fn new() -> Self {
+            Self {
+                speed: 0.0,
+                direction: Direction::Stopped,
+                set_speed_called: false,
+                set_direction_called: false,
+            }
+        }
+    }
+
+    impl MotorController for TestMotor {
+        type Error = ();
+
+        fn set_speed(&mut self, speed: f32) -> Result<(), ()> {
+            self.speed = speed;
+            self.set_speed_called = true;
+            Ok(())
+        }
+
+        fn set_direction(&mut self, dir: Direction) -> Result<(), ()> {
+            self.direction = dir;
+            self.set_direction_called = true;
+            Ok(())
+        }
+
+        fn read_current_ma(&self) -> Result<Option<u32>, ()> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn motor_controller_stop_default_impl() {
+        let mut motor = TestMotor::new();
+        motor.set_speed(0.5).unwrap();
+        motor.set_direction(Direction::Forward).unwrap();
+
+        // Reset flags
+        motor.set_speed_called = false;
+        motor.set_direction_called = false;
+
+        // Test stop() default implementation
+        motor.stop().unwrap();
+
+        assert_eq!(motor.speed, 0.0);
+        assert_eq!(motor.direction, Direction::Stopped);
+        assert!(motor.set_speed_called);
+        assert!(motor.set_direction_called);
+    }
+
+    // =========================================================================
+    // EncoderInput Default Methods Tests
+    // =========================================================================
+
+    struct TestEncoder {
+        button_state: bool,
+    }
+
+    impl TestEncoder {
+        fn new() -> Self {
+            Self {
+                button_state: false,
+            }
+        }
+    }
+
+    impl EncoderInput for TestEncoder {
+        fn read_delta(&mut self) -> i32 {
+            0
+        }
+
+        fn button_pressed(&self) -> bool {
+            self.button_state
+        }
+    }
+
+    #[test]
+    fn encoder_input_button_just_pressed_default_impl() {
+        let mut encoder = TestEncoder::new();
+
+        // Default implementation should just return button_pressed()
+        assert!(!encoder.button_just_pressed());
+
+        encoder.button_state = true;
+        assert!(encoder.button_just_pressed());
+
+        // Note: Default impl doesn't track edge - it just returns current state
+        assert!(encoder.button_just_pressed()); // Still returns true
+    }
+
+    // =========================================================================
+    // FaultDetector Default Methods Tests
+    // =========================================================================
+
+    struct TestFaultDetector {
+        short_circuit: bool,
+        overcurrent: bool,
+        current_ma: Option<u32>,
+    }
+
+    impl TestFaultDetector {
+        fn new() -> Self {
+            Self {
+                short_circuit: false,
+                overcurrent: false,
+                current_ma: None,
+            }
+        }
+    }
+
+    impl FaultDetector for TestFaultDetector {
+        fn is_short_circuit(&self) -> bool {
+            self.short_circuit
+        }
+
+        fn is_overcurrent(&self) -> bool {
+            self.overcurrent
+        }
+
+        fn fault_current_ma(&self) -> Option<u32> {
+            self.current_ma
+        }
+    }
+
+    #[test]
+    fn fault_detector_active_fault_none() {
+        let detector = TestFaultDetector::new();
+        assert_eq!(detector.active_fault(), None);
+    }
+
+    #[test]
+    fn fault_detector_active_fault_short_circuit() {
+        let mut detector = TestFaultDetector::new();
+        detector.short_circuit = true;
+        assert_eq!(detector.active_fault(), Some(FaultKind::ShortCircuit));
+    }
+
+    #[test]
+    fn fault_detector_active_fault_overcurrent() {
+        let mut detector = TestFaultDetector::new();
+        detector.overcurrent = true;
+        assert_eq!(detector.active_fault(), Some(FaultKind::Overcurrent));
+    }
+
+    #[test]
+    fn fault_detector_active_fault_priority() {
+        // Short circuit should take priority over overcurrent
+        let mut detector = TestFaultDetector::new();
+        detector.short_circuit = true;
+        detector.overcurrent = true;
+        assert_eq!(detector.active_fault(), Some(FaultKind::ShortCircuit));
+    }
+}

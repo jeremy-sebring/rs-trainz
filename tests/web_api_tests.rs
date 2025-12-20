@@ -11,7 +11,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use rs_trainz::hal::MockMotor;
-use rs_trainz::services::{build_router, ApiResponse, AppState, StateResponse, WebServerConfig};
+use rs_trainz::services::{build_router, AppState, WebServerConfig};
 use rs_trainz::ThrottleController;
 
 fn create_test_app() -> (axum::Router, Arc<AppState<MockMotor>>) {
@@ -42,16 +42,14 @@ async fn test_get_state() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: ApiResponse<StateResponse> = serde_json::from_slice(&body).unwrap();
+    
+    // Response is a simple JSON object (from state_to_json)
+    let data: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert!(json.success);
-    assert!(json.data.is_some());
-
-    let data = json.data.unwrap();
-    assert_eq!(data.speed, 0.0);
-    assert_eq!(data.direction, rs_trainz::Direction::Stopped);
-    assert_eq!(data.max_speed, 1.0);
-    assert!(!data.transitioning);
+    assert_eq!(data["speed"], 0.0);
+    assert_eq!(data["direction"], "stopped");
+    assert_eq!(data["max_speed"], 1.0);
+    assert_eq!(data["is_transitioning"], false);
 }
 
 #[tokio::test]
@@ -114,7 +112,7 @@ async fn test_set_speed_with_transition() {
 async fn test_set_speed_validation() {
     let (app, _state) = create_test_app();
 
-    // Test invalid speed > 1.0
+    // Test invalid speed > 1.0 returns BAD_REQUEST
     let response = app
         .clone()
         .oneshot(
@@ -128,14 +126,8 @@ async fn test_set_speed_validation() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: ApiResponse<()> = serde_json::from_slice(&body).unwrap();
-    assert!(!json.success);
-    assert!(json.error.is_some());
+    // Invalid speed range now returns 400 Bad Request
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

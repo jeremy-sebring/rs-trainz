@@ -30,7 +30,8 @@
 //! ```
 
 use crate::config::MqttConfig;
-use crate::traits::{MqttClient, MqttMessage};
+use crate::messages::{SetDirectionRequest, SetMaxSpeedRequest, SetSpeedRequest};
+use crate::traits::{EaseInOut, Linear, MqttClient, MqttMessage};
 use crate::{Direction, ThrottleCommand, ThrottleCommandDyn, ThrottleState};
 use esp_idf_svc::mqtt::client::{
     EspMqttClient, EspMqttConnection, EventPayload, MqttClientConfiguration, QoS,
@@ -101,7 +102,7 @@ impl Esp32Mqtt {
 
     /// Subscribe to all control topics.
     fn subscribe_all(&mut self) -> anyhow::Result<()> {
-        let topics = ["speed/set", "direction/set", "estop"];
+        let topics = ["speed/set", "direction/set", "estop", "max-speed/set"];
         for topic_suffix in topics {
             let mut full_topic: heapless::String<128> = heapless::String::new();
             let _ = full_topic.push_str(self.topic_prefix.as_str());
@@ -263,21 +264,83 @@ fn parse_mqtt_message(
     let suffix = topic.strip_prefix(prefix.as_str())?.strip_prefix('/')?;
 
     match suffix {
-        "speed/set" => {
-            let payload = core::str::from_utf8(data).ok()?;
-            let speed: f32 = payload.trim().parse().ok()?;
-            Some(ThrottleCommand::speed_immediate(speed.clamp(0.0, 1.0)).into())
-        }
-        "direction/set" => {
-            let payload = core::str::from_utf8(data).ok()?.trim();
-            let dir = match payload {
-                "forward" | "fwd" | "1" => Direction::Forward,
-                "reverse" | "rev" | "-1" => Direction::Reverse,
-                _ => return None,
-            };
-            Some(ThrottleCommandDyn::SetDirection(dir))
-        }
+        "speed/set" => parse_speed_command(data),
+        "direction/set" => parse_direction_command(data),
+        "max-speed/set" => parse_max_speed_command(data),
         "estop" => Some(ThrottleCommandDyn::EmergencyStop),
         _ => None,
     }
+}
+
+/// Parse speed command from JSON or plain float.
+///
+/// Supports both formats for compatibility:
+/// - Plain float: `0.5`
+/// - JSON: `{"speed": 0.5, "duration_ms": 1000, "smooth": true}`
+fn parse_speed_command(data: &[u8]) -> Option<ThrottleCommandDyn> {
+    // Try JSON first
+    if let Ok((req, _)) = serde_json_core::from_slice::<SetSpeedRequest>(data) {
+        let speed = req.speed.clamp(0.0, 1.0);
+        return Some(if req.duration_ms > 0 {
+            if req.smooth {
+                ThrottleCommand::SetSpeed {
+                    target: speed,
+                    strategy: EaseInOut::new(req.duration_ms),
+                }
+                .into()
+            } else {
+                ThrottleCommand::SetSpeed {
+                    target: speed,
+                    strategy: Linear::new(req.duration_ms),
+                }
+                .into()
+            }
+        } else {
+            ThrottleCommand::speed_immediate(speed).into()
+        });
+    }
+
+    // Fall back to plain float for backward compatibility
+    let payload = core::str::from_utf8(data).ok()?;
+    let speed: f32 = payload.trim().parse().ok()?;
+    Some(ThrottleCommand::speed_immediate(speed.clamp(0.0, 1.0)).into())
+}
+
+/// Parse direction command from JSON or plain text.
+///
+/// Supports both formats:
+/// - Plain text: `forward`, `fwd`, `1`, `reverse`, `rev`, `-1`, `stop`, `stopped`
+/// - JSON: `{"direction": "forward"}`
+fn parse_direction_command(data: &[u8]) -> Option<ThrottleCommandDyn> {
+    // Try JSON first
+    if let Ok((req, _)) = serde_json_core::from_slice::<SetDirectionRequest>(data) {
+        return Some(ThrottleCommandDyn::SetDirection(req.direction));
+    }
+
+    // Fall back to plain text for backward compatibility
+    let payload = core::str::from_utf8(data).ok()?.trim();
+    let dir = match payload {
+        "forward" | "fwd" | "1" => Direction::Forward,
+        "reverse" | "rev" | "-1" => Direction::Reverse,
+        "stop" | "stopped" | "0" => Direction::Stopped,
+        _ => return None,
+    };
+    Some(ThrottleCommandDyn::SetDirection(dir))
+}
+
+/// Parse max-speed command from JSON or plain float.
+///
+/// Supports both formats:
+/// - Plain float: `0.8`
+/// - JSON: `{"max_speed": 0.8}`
+fn parse_max_speed_command(data: &[u8]) -> Option<ThrottleCommandDyn> {
+    // Try JSON first
+    if let Ok((req, _)) = serde_json_core::from_slice::<SetMaxSpeedRequest>(data) {
+        return Some(ThrottleCommandDyn::SetMaxSpeed(req.max_speed.clamp(0.0, 1.0)));
+    }
+
+    // Fall back to plain float
+    let payload = core::str::from_utf8(data).ok()?;
+    let max_speed: f32 = payload.trim().parse().ok()?;
+    Some(ThrottleCommandDyn::SetMaxSpeed(max_speed.clamp(0.0, 1.0)))
 }
