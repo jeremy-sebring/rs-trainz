@@ -1,0 +1,76 @@
+# ESP32 Build Verification
+# Verifies ESP32 firmware builds successfully
+# Runs on PRs that modify ESP32-related code
+
+name: ESP32 Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/hal/esp32/**'
+      - 'src/bin/esp32_main.rs'
+      - 'Cargo.toml'
+      - 'sdkconfig.defaults'
+      - '.cargo/config.toml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'src/hal/esp32/**'
+      - 'src/bin/esp32_main.rs'
+      - 'Cargo.toml'
+      - 'sdkconfig.defaults'
+      - '.cargo/config.toml'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  esp32-build:
+    name: ESP32-C3 Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ESP toolchain
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32c3
+          ldproxy: true
+
+      - name: Cache ESP-IDF and cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.espressif
+            target
+          key: ${{ runner.os }}-esp32-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-esp32-
+
+      - name: Build basic ESP32 firmware
+        run: cargo build --release --target riscv32imc-esp-espidf --features esp32
+
+      - name: Build with display feature
+        run: cargo build --release --target riscv32imc-esp-espidf --features esp32,display
+
+      - name: Build with HTTP feature
+        run: cargo build --release --target riscv32imc-esp-espidf --features esp32-http
+
+      - name: Build with MQTT feature
+        run: cargo build --release --target riscv32imc-esp-espidf --features esp32-mqtt
+
+      - name: Build full feature set
+        run: cargo build --release --target riscv32imc-esp-espidf --features esp32,display,esp32-net
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware
+          path: target/riscv32imc-esp-espidf/release/esp32_main
+          retention-days: 7
